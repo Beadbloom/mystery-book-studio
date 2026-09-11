@@ -1,0 +1,9 @@
+{
+  "name": "Mystery Book Studio",
+  "short_name": "Mystery Book",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f5f5f8",
+  "theme_color": "#6b4eff"
+}
