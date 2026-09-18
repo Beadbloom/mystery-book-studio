@@ -1,47 +1,49 @@
-/* v23 three-page PDF import using PDF.js */
+/* v24 robust three-page PDF import */
 (()=>{
- const PDFJS='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs';
- function dataURL(canvas){return canvas.toDataURL('image/png',0.96)}
- async function loadPdfJs(){return await import(PDFJS)}
+ const VER='4.10.38',BASE='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/'+VER+'/';
+ let pdfjsPromise;
+ async function loadPdfJs(){
+   if(!pdfjsPromise)pdfjsPromise=import(BASE+'pdf.min.mjs').then(m=>{m.GlobalWorkerOptions.workerSrc=BASE+'pdf.worker.min.mjs';return m});
+   return pdfjsPromise;
+ }
  async function renderPage(pdf,n){
-   const p=await pdf.getPage(n),v=p.getViewport({scale:2});
+   const p=await pdf.getPage(n),v=p.getViewport({scale:1.5});
    const c=document.createElement('canvas');c.width=Math.ceil(v.width);c.height=Math.ceil(v.height);
-   await p.render({canvasContext:c.getContext('2d'),viewport:v}).promise;return dataURL(c);
+   await p.render({canvasContext:c.getContext('2d',{alpha:false}),viewport:v}).promise;
+   return c.toDataURL('image/jpeg',.92);
  }
  function ensureUI(){
    const stage=document.getElementById('uploadStage');if(!stage||document.getElementById('pdfImportBox'))return;
    const box=document.createElement('div');box.id='pdfImportBox';box.className='modeBox';
-   box.innerHTML='<label style="font-size:14px">Have all three pages in one PDF?</label><input id="pdfImport" type="file" accept="application/pdf,.pdf"><small style="display:block;margin-top:6px">Upload the 3-page PDF once. The app will extract all three pages, then you can assign which page is Completed artwork, Colourless mystery and Colour swatch.</small><div id="pdfAssign" class="hidden" style="margin-top:10px"></div>';
-   const mode=stage.querySelector('.modeBox');mode.after(box);
-   document.getElementById('pdfImport').onchange=importPdf;
+   box.innerHTML='<label style="font-size:14px">Upload all three pages from one PDF</label><input id="pdfImport" type="file" accept=".pdf,application/pdf"><small style="display:block;margin-top:6px">Select the PDF. The first three pages will appear below so you can assign them before importing.</small><div id="pdfAssign" class="hidden" style="margin-top:10px"></div>';
+   stage.querySelector('.modeBox').after(box);document.getElementById('pdfImport').addEventListener('change',importPdf);
  }
  async function importPdf(e){
-   const f=e.target.files?.[0];if(!f||!current)return;
-   const out=document.getElementById('pdfAssign');out.classList.remove('hidden');out.innerHTML='<div class="note">Opening PDF…</div>';
+   const f=e.target.files&&e.target.files[0],out=document.getElementById('pdfAssign');if(!f||!out)return;
+   out.classList.remove('hidden');out.innerHTML='<div class="note">Opening '+f.name+'…</div>';
    try{
-     const pdfjs=await loadPdfJs(),buf=await f.arrayBuffer();
-     const pdf=await pdfjs.getDocument({data:buf}).promise;
-     if(pdf.numPages<3){out.innerHTML='<div class="note">This PDF has fewer than 3 pages.</div>';return}
-     const pages=[];for(let i=1;i<=Math.min(pdf.numPages,3);i++)pages.push(await renderPage(pdf,i));
-     current.pdfPages=pages;
-     renderAssign();
-   }catch(err){out.innerHTML='<div class="note">I could not open this PDF on this device. Try reopening the app while online and selecting it again.</div>'}
+     const pdfjs=await loadPdfJs(),bytes=new Uint8Array(await f.arrayBuffer());
+     const task=pdfjs.getDocument({data:bytes,useWorkerFetch:false,isEvalSupported:false});
+     const pdf=await task.promise;
+     if(pdf.numPages<3)throw new Error('The selected PDF has only '+pdf.numPages+' page'+(pdf.numPages===1?'':'s')+'. I need at least 3.');
+     const pages=[];for(let i=1;i<=3;i++){out.innerHTML='<div class="note">Reading PDF page '+i+' of 3…</div>';pages.push(await renderPage(pdf,i))}
+     if(!current)throw new Error('Open or create a design first.');
+     current.pdfPages=pages;renderAssign();
+   }catch(err){out.innerHTML='<div class="note" style="color:#a31515"><strong>PDF could not be opened.</strong><br>'+String(err&&err.message||err)+'</div>';e.target.value=''}
  }
+ function opts(sel){return [0,1,2].map(i=>'<option value="'+i+'"'+(i===sel?' selected':'')+'>PDF page '+(i+1)+'</option>').join('')}
  function renderAssign(){
-   const out=document.getElementById('pdfAssign'),p=current?.pdfPages||[];if(p.length<3)return;
-   out.innerHTML='<div class="v23Pages">'+p.map((src,i)=>'<div><img src="'+src+'"><strong>PDF page '+(i+1)+'</strong></div>').join('')+'</div>'+
-   '<div class="row3" style="margin-top:10px"><div><label>Completed artwork</label><select id="pdfMain">'+opts()+'</select></div><div><label>Colourless mystery</label><select id="pdfLine">'+opts(1)+'</select></div><div><label>Colour swatch</label><select id="pdfSwatch">'+opts(2)+'</select></div></div><button id="usePdfPages" class="primary" style="margin-top:10px">Use these three PDF pages</button>';
+   const p=current.pdfPages,out=document.getElementById('pdfAssign');
+   out.innerHTML='<div class="v24Pages">'+p.map((s,i)=>'<div><img src="'+s+'"><strong>Page '+(i+1)+'</strong></div>').join('')+'</div><div class="row3" style="margin-top:10px"><div><label>Completed artwork</label><select id="pdfMain">'+opts(0)+'</select></div><div><label>Colourless mystery</label><select id="pdfLine">'+opts(1)+'</select></div><div><label>Colour swatch</label><select id="pdfSwatch">'+opts(2)+'</select></div></div><button id="usePdfPages" class="primary" style="margin-top:10px">Import these pages</button>';
    document.getElementById('usePdfPages').onclick=usePages;
  }
- function opts(sel=0){return [0,1,2].map(i=>'<option value="'+i+'" '+(i===sel?'selected':'')+'>Page '+(i+1)+'</option>').join('')}
  async function usePages(){
-   if(!current)return;const p=current.pdfPages;
-   current.main=p[+document.getElementById('pdfMain').value];current.line=p[+document.getElementById('pdfLine').value];current.swatchSource=p[+document.getElementById('pdfSwatch').value];
-   current.mainRotation=0;current.lineRotation=0;
+   const p=current&&current.pdfPages;if(!p)return;
+   current.main=p[+document.getElementById('pdfMain').value];current.line=p[+document.getElementById('pdfLine').value];current.swatchSource=p[+document.getElementById('pdfSwatch').value];current.mainRotation=0;current.lineRotation=0;
    document.getElementById('mainPreview').src=current.main;document.getElementById('linePreview').src=current.line;document.getElementById('swatchPreview').src=current.swatchSource;
-   checkUploads();await save();
-   const b=document.getElementById('pdfAssign');b.innerHTML='<div class="note"><strong>PDF pages loaded.</strong> You can now use the Rotate left/right buttons under the artwork previews before approving.</div>';
+   if(typeof checkUploads==='function')checkUploads();else document.getElementById('approvePair').disabled=!(current.main&&current.line&&current.swatchSource);
+   await save();document.getElementById('pdfAssign').innerHTML='<div class="note"><strong>Three pages imported.</strong> Check the previews and rotate either artwork if needed before approving.</div>';
  }
- const st=document.createElement('style');st.textContent='.v23Pages{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.v23Pages>div{border:1px solid var(--line);border-radius:9px;padding:5px;background:#fff}.v23Pages img{width:100%;height:130px;object-fit:contain;background:#eee}.v23Pages strong{display:block;text-align:center;font-size:10px;margin-top:3px}@media(max-width:650px){.v23Pages{grid-template-columns:1fr 1fr 1fr}.v23Pages img{height:90px}}';document.head.appendChild(st);
+ const st=document.createElement('style');st.textContent='.v24Pages{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.v24Pages>div{border:1px solid var(--line);border-radius:9px;padding:5px;background:#fff}.v24Pages img{width:100%;height:130px;object-fit:contain;background:#eee}.v24Pages strong{display:block;text-align:center;font-size:10px;margin-top:3px}@media(max-width:650px){.v24Pages img{height:90px}}';document.head.appendChild(st);
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',ensureUI);else ensureUI();
 })();
